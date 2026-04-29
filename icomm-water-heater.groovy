@@ -89,12 +89,12 @@ def ProcessUpdate(heater) {
     UpsertAttribute("Serial Number", heater.serial)
     UpsertAttribute("Install Location", heater?.install?.location)
 
-    def setpoint = heater?.data?.temperatureSetpoint
+    def setpoint = toHubScale(heater?.data?.temperatureSetpoint)
     UpsertAttribute("thermostatSetpoint", setpoint, location.temperatureScale)
     UpsertAttribute("heatingSetpoint", setpoint, location.temperatureScale)
     UpsertAttribute(
         "Maximum Temperature",
-        heater?.data?.temperatureSetpointMaximum,
+        toHubScale(heater?.data?.temperatureSetpointMaximum),
         location.temperatureScale
     );
     UpsertAttribute("Mode", heater?.data?.mode);
@@ -184,28 +184,25 @@ def refresh() {
 }
 
 def normalizeTemperature(temperature) {
-    minimumTemperature = 95
+    def minimumInHubScale = toHubScale(95)
 
     if (temperature == null) {
-        return minimumTemperature;
+        return minimumInHubScale
     }
 
-    if (temperature < minimumTemperature) {
-        log.warn("${temperature} on ${device.getDisplayName()} is less than minimum temperature ${minimumTemperature}.  Will set to minimum temperature.")
-
-        return minimumTemperature;
+    if (toApiScale(temperature) < 95) {
+        log.warn("${temperature} on ${device.getDisplayName()} is less than minimum temperature ${minimumInHubScale}${location.temperatureScale}.  Will set to minimum temperature.")
+        return minimumInHubScale
     }
 
-    maximumTemperature = device.currentValue("Maximum Temperature")
-
-    if (temperature > maximumTemperature) {
-        log.warn("setHeatingSetpoint(${temperature}) on ${device.getDisplayName()} is greater than maximum temperature ${maximumTemperature}.  Will set to maximum temperature.")
+    def maximumTemperature = device.currentValue("Maximum Temperature")
+    if (maximumTemperature != null && temperature > maximumTemperature) {
+        log.warn("setHeatingSetpoint(${temperature}) on ${device.getDisplayName()} is greater than maximum temperature ${maximumTemperature}${location.temperatureScale}.  Will set to maximum temperature.")
         log.info("You may be able to increase the maximum temperature from the water heater's control panel.")
-
-        return maximumTemperature;
+        return maximumTemperature
     }
 
-    return temperature;
+    return temperature
 }
 
 def setHeatingSetpoint(temperature) {
@@ -216,8 +213,14 @@ def setHeatingSetpoint(temperature) {
         log.warn("setHeatingSetpoint(${temperature}) on ${device.getDisplayName()} is null.  Will not set.")
         return
     }
-    else if (temperature == device.currentValue("thermostatSetpoint")) {
-        debug("setHeatingSetpoint(${temperature}) on ${device.getDisplayName()} is already set.")
+
+    def canonical = snapToCanonical(temperature)
+    if (canonical != temperature) {
+        log.info("Adjusted requested setpoint ${temperature}${location.temperatureScale} to ${canonical}${location.temperatureScale} (closest value the device can store).")
+    }
+
+    if (canonical == device.currentValue("thermostatSetpoint")) {
+        debug("setHeatingSetpoint(${canonical}) on ${device.getDisplayName()} is already set.")
         return
     }
 
@@ -225,7 +228,7 @@ def setHeatingSetpoint(temperature) {
         SET_HEATING_SETPOINT,
         [
             "junctionId": device.deviceNetworkId,
-            "value": temperature
+            "value": toApiScale(canonical)
         ],
         "ProcessSetpointChange"
     )
@@ -237,6 +240,32 @@ def debug(String message) {
     }
 }
 
+
+// The iCOMM API is strictly Fahrenheit. These helpers translate between the
+// API's units and the hub's configured display scale (location.temperatureScale).
+def toHubScale(fahrenheit) {
+    if (fahrenheit == null) return null
+    if (location.temperatureScale == "C") {
+        return Math.round((fahrenheit - 32) * 5 / 9 * 2) / 2.0
+    }
+    return fahrenheit as Integer
+}
+
+def toApiScale(value) {
+    if (value == null) return null
+    if (location.temperatureScale == "C") {
+        return Math.round(value * 9 / 5 + 32) as Integer
+    }
+    return value as Integer
+}
+
+// 0.5 °C steps don't line up with integer °F steps, so a user-entered °C value
+// can round-trip to a different °C on the next refresh. Snap to the canonical
+// °C for the °F that would actually be sent, so write→read→write is stable.
+def snapToCanonical(value) {
+    if (value == null) return null
+    return toHubScale(toApiScale(value))
+}
 
 def UpsertAttribute( Variable, Value, Unit = null ){
     if( device.currentValue(Variable) != Value ){
