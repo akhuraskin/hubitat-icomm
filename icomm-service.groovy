@@ -14,15 +14,22 @@
 * Password = REQUIRED. Login password for the iCOMM account
 * RefreshRate = REQUIRED; DEFAULT is 5 minutes. The rate at which the water heaters will be polled
 * DebugLogs = OPTIONAL - DEFAULT = false. Should debug logging be enabled?
+*
+* Change Log:
+* [6/7/2026]   Fix breaking iCOMM GraphQL API changes (brand header, app
+*              version, login locale, flattened device location field, new
+*              HeatPump / RE3Premium device types) and remove the now-unused
+*              Brand preference
+* [5/9/2025]   Initial release
 */
 
 import groovy.transform.Field
 
-@Field static final String AOSMITH = "aosmith"
-@Field static final String STATE = "state"
 @Field static final String BASE_URI = "https://r2.wh8.co"
-@Field static final String APP_VERSION = "13.0.2"
-@Field static final String USER_AGENT = "okhttp/4.9.2"
+@Field static final String APP_VERSION = "14.1.0"
+@Field static final String USER_AGENT = "okhttp/4.12.0"
+// The API expects a fixed brand header for all brands.
+@Field static final String BRAND_HEADER = "icomm"
 
 metadata{
     definition ( name: "iCOMM", namespace: "evequefou", author: "Mike Bishop", importUrl: "https://raw.githubusercontent.com/MikeBishop/hubitat-icomm/refs/heads/main/icomm-service.groovy" ) {
@@ -37,8 +44,6 @@ metadata{
             // Login information for the iCOMM account
             input( type: "string", name: "EmailAddress", title: "<font color='FF0000'><b>iCOMM account e-mail address</b></font>", required: true )
             input( type: "password", name: "Password", title: "<font color='FF0000'><b>iCOMM account password</b></font>", required: true )
-
-            input( type: "enum", name: "Brand", title: "<b>Brand</b>", required: true, options: [ (AOSMITH): "A.O. Smith", (STATE): "State" ], defaultValue: "A.O. Smith" )
 
             // Enum to allow selecting the refresh rate that the device will be checked
             input( type: "enum", name: "RefreshRate", title: "<b>Refresh Rate</b>", required: false, multiple: false, options: [ "15 seconds", "30 seconds", "1 minute", "5 minutes", "10 minutes", "15 minutes", "30 minutes", "1 hour", "3 hours", "Manual" ], defaultValue: "5 minutes" )
@@ -158,7 +163,7 @@ def LoginIfNoToken() {
         return false
     }
 
-    def credentials = ['email': EmailAddress, 'password': Password];
+    def credentials = ['email': EmailAddress, 'password': Password, 'locale': 'en'];
     def jsonString = groovy.json.JsonOutput.toJson(credentials);
     def urlEncoded = java.net.URLEncoder.encode(jsonString, "UTF-8");
     def passcode = new String(
@@ -190,7 +195,7 @@ def ProcessGetDevicesResponse(response) {
     debug("Got response ${response.getData()?.data?.devices}")
 
     def waterHeaters = response.getData()?.data?.devices.findAll {
-        ["NextGenHeatPump", "RE3Connected"].contains(it?.data?.__typename)
+        ["HeatPump", "NextGenHeatPump", "RE3Connected", "RE3Premium"].contains(it?.data?.__typename)
     };
 
     if (waterHeaters == null || waterHeaters.size() == 0) {
@@ -219,7 +224,7 @@ def ProcessDeviceUpdate(heater) {
     if (!getChildDevice(heater.junctionId)) {
         addChildDevice("iCOMMWaterHeater", heater.junctionId, [
             isComponent: true,
-            name: heater.name ?: "${heater.install.location} Water Heater",
+            name: heater.name ?: "${heater.location} Water Heater",
         ])
     }
 
@@ -247,7 +252,7 @@ def ProcessChange(response, fieldToCheck) {
 
 def sendGraphQLRequest(query, variables, handler, autologin = true, retry = false) {
     def headers = [
-        "brand": Brand,
+        "brand": BRAND_HEADER,
         "version": APP_VERSION,
         "User-Agent": USER_AGENT,
     ];
@@ -373,19 +378,24 @@ query devices(\$forceUpdate: Boolean, \$junctionIds: [String]) {
         junctionId
         name
         serial
-        install {
-            location
-        }
+        location
         data {
             __typename
             temperatureSetpoint
             temperatureSetpointPending
+            temperatureSetpointPrevious
             temperatureSetpointMaximum
             modes {
                 mode
                 controls
             }
             isOnline
+            ... on HeatPump {
+                firmwareVersion
+                hotWaterStatus
+                mode
+                modePending
+            }
             ... on NextGenHeatPump {
                 firmwareVersion
                 hotWaterStatus
@@ -397,6 +407,13 @@ query devices(\$forceUpdate: Boolean, \$junctionIds: [String]) {
                 hotWaterStatus
                 mode
                 modePending
+            }
+            ... on RE3Premium {
+                firmwareVersion
+                hotWaterStatus
+                mode
+                modePending
+                hotWaterPlusLevel
             }
         }
     }
