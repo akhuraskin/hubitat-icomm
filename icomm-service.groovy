@@ -18,13 +18,10 @@
 
 import groovy.transform.Field
 
-@Field static final String AOSMITH = "aosmith"
-@Field static final String STATE = "state"
 @Field static final String BASE_URI = "https://r2.wh8.co"
 @Field static final String APP_VERSION = "14.1.0"
 @Field static final String USER_AGENT = "okhttp/4.12.0"
-// The API now expects a fixed brand header for all brands; the Brand
-// preference no longer maps to this value.
+// The API expects a fixed brand header for all brands.
 @Field static final String BRAND_HEADER = "icomm"
 
 metadata{
@@ -40,8 +37,6 @@ metadata{
             // Login information for the iCOMM account
             input( type: "string", name: "EmailAddress", title: "<font color='FF0000'><b>iCOMM account e-mail address</b></font>", required: true )
             input( type: "password", name: "Password", title: "<font color='FF0000'><b>iCOMM account password</b></font>", required: true )
-
-            input( type: "enum", name: "Brand", title: "<b>Brand</b>", required: true, options: [ (AOSMITH): "A.O. Smith", (STATE): "State" ], defaultValue: "A.O. Smith" )
 
             // Enum to allow selecting the refresh rate that the device will be checked
             input( type: "enum", name: "RefreshRate", title: "<b>Refresh Rate</b>", required: false, multiple: false, options: [ "15 seconds", "30 seconds", "1 minute", "5 minutes", "10 minutes", "15 minutes", "30 minutes", "1 hour", "3 hours", "Manual" ], defaultValue: "5 minutes" )
