@@ -15,4 +15,7 @@ Based on:
 
 # Change Log
 
+* [6/7/2026]   Fix breaking iCOMM GraphQL API changes (brand header, app
+  version, login locale, flattened device `location` field, new HeatPump /
+  RE3Premium device types)
 * [5/9/2025]   Initial release

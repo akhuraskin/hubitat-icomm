@@ -87,7 +87,7 @@ def ProcessUpdate(heater) {
     UpsertAttribute("DSN", heater.dsn)
     device.setName(heater.name)
     UpsertAttribute("Serial Number", heater.serial)
-    UpsertAttribute("Install Location", heater?.install?.location)
+    UpsertAttribute("Install Location", heater?.location)
 
     def setpoint = toHubScale(heater?.data?.temperatureSetpoint)
     UpsertAttribute("thermostatSetpoint", setpoint, location.temperatureScale)
