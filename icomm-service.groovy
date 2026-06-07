@@ -32,7 +32,7 @@ import groovy.transform.Field
 @Field static final String BRAND_HEADER = "icomm"
 
 metadata{
-    definition ( name: "iCOMM", namespace: "evequefou", author: "Mike Bishop", importUrl: "https://raw.githubusercontent.com/akhuraskin/hubitat-icomm/refs/heads/main/icomm-service.groovy" ) {
+    definition ( name: "iCOMM", namespace: "evequefou", author: "Mike Bishop", importUrl: "https://raw.githubusercontent.com/MikeBishop/hubitat-icomm/refs/heads/main/icomm-service.groovy" ) {
         // Attempting to indicate what capabilities the device should be capable of
         capability "Refresh"
 
