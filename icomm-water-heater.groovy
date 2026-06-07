@@ -11,6 +11,13 @@
 * Based on:
 * - py-aosmith by bdr99, https://github.com/bdr99/py-aosmith/
 * - Schluter Ditra driver by Marc Reyhner, https://github.com/marcre/hubitat-drivers
+*
+* Change Log:
+* [6/7/2026]   Fix breaking iCOMM GraphQL API changes (brand header, app
+*              version, login locale, flattened device location field, new
+*              HeatPump / RE3Premium device types) and remove the now-unused
+*              Brand preference
+* [5/9/2025]   Initial release
 */
 
 import groovy.transform.Field

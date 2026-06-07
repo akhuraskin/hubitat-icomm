@@ -14,6 +14,13 @@
 * Password = REQUIRED. Login password for the iCOMM account
 * RefreshRate = REQUIRED; DEFAULT is 5 minutes. The rate at which the water heaters will be polled
 * DebugLogs = OPTIONAL - DEFAULT = false. Should debug logging be enabled?
+*
+* Change Log:
+* [6/7/2026]   Fix breaking iCOMM GraphQL API changes (brand header, app
+*              version, login locale, flattened device location field, new
+*              HeatPump / RE3Premium device types) and remove the now-unused
+*              Brand preference
+* [5/9/2025]   Initial release
 */
 
 import groovy.transform.Field
