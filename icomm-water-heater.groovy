@@ -13,6 +13,9 @@
 * - Schluter Ditra driver by Marc Reyhner, https://github.com/marcre/hubitat-drivers
 *
 * Change Log:
+* [10/18/2026] Hide controls the water heater doesn't support (cooling, fan,
+*              thermostat mode, schedule, set level). Only Set Heating
+*              Setpoint, Set Mode and Refresh remain
 * [6/7/2026]   Fix breaking iCOMM GraphQL API changes (brand header, app
 *              version, login locale, flattened device location field, new
 *              HeatPump / RE3Premium device types) and remove the now-unused
@@ -21,17 +24,15 @@
 */
 
 import groovy.transform.Field
-import groovy.json.JsonOutput
 
 metadata{
     definition ( name: "iCOMMWaterHeater", namespace: "evequefou", author: "Mike Bishop", importUrl: "https://raw.githubusercontent.com/MikeBishop/hubitat-icomm/refs/heads/main/icomm-water-heater.groovy" ) {
         capability "Sensor"
         capability "Refresh"
-        capability "Thermostat"
         capability "ThermostatHeatingSetpoint"
         capability "ThermostatOperatingState"
         capability "ThermostatSetpoint"
-        capability "SwitchLevel"
+        attribute "level", "number"
         attribute "Brand", "string"
         attribute "Model", "string"
         attribute "Device Type", "string"
@@ -43,10 +44,6 @@ metadata{
         attribute "Online", "string"
         attribute "Firmware Version", "string"
         attribute "Mode", "string"
-        attribute "supportedThermostatFanModes", "string"
-        attribute 'supportedThermostatModes', "string"
-        attribute "thermostatFanMode", "string"
-        attribute "thermostatMode", "string"
 
         command "setMode", [
             [
@@ -77,16 +74,34 @@ metadata{
     }
 }
 
-def installed() {
-    // Set static attributes at install time
-    UpsertAttribute('supportedThermostatFanModes', JsonOutput.toJson(["off"]) )
-    UpsertAttribute('supportedThermostatModes', JsonOutput.toJson(["heat"]) )
-    UpsertAttribute("thermostatFanMode", "off")
-    UpsertAttribute("thermostatMode", "heat")
+// Readings left over from older versions that exposed the full Thermostat
+// capability. They no longer apply, so clear them from the device page.
+@Field static final List LEGACY_ATTRIBUTES = [
+    "supportedThermostatFanModes",
+    "supportedThermostatModes",
+    "thermostatFanMode",
+    "thermostatMode",
+    "coolingSetpoint",
+    "schedule"
+]
+
+def removeLegacyAttributes() {
+    LEGACY_ATTRIBUTES.each { name ->
+        try {
+            device.deleteCurrentState(name)
+        } catch (e) {
+            debug("Could not remove old reading ${name}: ${e}")
+        }
+    }
+    state.legacyAttributesRemoved = true
 }
 
 def ProcessUpdate(heater) {
     debug("Thermostat raw data ${heater.toString()}")
+
+    if (!state.legacyAttributesRemoved) {
+        removeLegacyAttributes()
+    }
 
     UpsertAttribute("Brand", heater.brand)
     UpsertAttribute("Model", heater.model)
@@ -134,10 +149,6 @@ def ProcessUpdate(heater) {
     if (heater?.data?.modePending || heater?.data?.temperatureSetpointPending) {
         debug("Pending changes on ${device.getDisplayName()}")
         runIn(5, "refresh")
-    }
-
-    if (device.currentValue("thermostatMode") != "heat" ) {
-        installed();
     }
 }
 
@@ -285,59 +296,6 @@ def UpsertAttribute( Variable, Value, Unit = null ){
             sendEvent( name: "${ Variable }", value: Value )
         }
     }
-}
-
-// Dummy functions
-def setLevel(level) {
-    log.warn("You cannot set the level on your water heater. It refills automatically.");
-}
-
-def cool() {
-    log.warn("cool() is not supported and takes no action.")
-}
-
-def emergencyHeat() {
-    log.warn("emergencyHeat() is not supported and takes no action.")
-}
-
-def setCoolingSetpoint(requestedTemperator) {
-    log.warn("setCoolingSetpoint() is not supported and takes no action.")
-}
-
-def fanAuto() {
-    log.warn("fanAuto() is not supported and takes no action.")
-}
-
-def fanCirculate() {
-    log.warn("fanCirculate() is not supported and takes no action.")
-}
-
-def fanOn() {
-    log.warn("fanOn() is not supported and takes no action.")
-}
-
-def setSchedule(schedule) {
-    log.warn("setSchedule() is not supported and takes no action.")
-}
-
-def setThermostatFanMode(fanmode) {
-    log.warn("setThermostatFanMode() is not supported and takes no action.")
-}
-
-def setThermostatMode(mode) {
-    log.warn("setThermostatMode() is not supported and takes no action.")
-}
-
-def auto() {
-    log.warn("auto() is not supported and takes no action. Consider setting the thermostat mode instead.")
-}
-
-def heat() {
-    log.warn("heat() is not supported and takes no action. Consider setting the thermostat mode instead.")
-}
-
-def off() {
-    log.warn("off() is not supported and takes no action. Consider setting the thermostat to Vacation Mode instead.")
 }
 
 @Field static final String SET_MODE = "mutation updateMode(\$junctionId: String!, \$mode: ModeInput!) { updateMode(junctionId: \$junctionId, mode: \$mode) }";

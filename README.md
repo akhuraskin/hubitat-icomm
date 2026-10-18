@@ -15,6 +15,9 @@ Based on:
 
 # Change Log
 
+* [10/18/2026] Hide controls the water heater doesn't support (cooling, fan,
+  thermostat mode, schedule, set level). Only Set Heating Setpoint, Set Mode
+  and Refresh remain
 * [6/7/2026]   Fix breaking iCOMM GraphQL API changes (brand header, app
   version, login locale, flattened device `location` field, new HeatPump /
   RE3Premium device types) and remove the now-unused Brand preference
