@@ -22,8 +22,8 @@ Cold → Normal → Boost → Normal → Cold
 
 | Period | Default | When |
 | --- | --- | --- |
-| Boost | 52°C / 126°F | The warmest hours between 13:00 and 19:00 (4 hours), so extra heat is stored while the heat pump works best and is ready by evening. Without a forecast: 15:00–19:00. |
-| Cold | 43°C / 109°F | Hours forecast below 8°C / 46°F, when the heat pump would fall back to the electric element. Without a forecast: 22:00–08:00. Wins over Boost. |
+| Boost | 52°C / 126°F | The warmest hours between 13:00 and 19:00 (4 hours), so extra heat is stored while the heat pump works best and is ready by evening. Skipped in hours below 8°C / 46°F. Without a forecast: 15:00–19:00. |
+| Cold | 43°C / 109°F | Night hours (22:00–07:00) forecast below 8°C / 46°F, when the heat pump would fall back to the electric element. Without a forecast: the whole night. |
 | Normal | 48°C / 118°F | Every other hour. |
 
 - **Forecast**: [Open-Meteo](https://open-meteo.com), no account needed. Uses

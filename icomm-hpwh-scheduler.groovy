@@ -10,9 +10,10 @@
 * - Boost:  stores extra heat during the warmest hours of the afternoon, when
 *           the heat pump works best, finishing by the time hot water is
 *           needed in the evening.
-* - Cold:   lowers the temperature for hours forecast below the cold threshold,
-*           when the heat pump would fall back to the electric element. Uses
-*           fixed night hours when no forecast is available.
+* - Cold:   lowers the temperature at night (22:00-07:00 by default) for
+*           hours forecast below the cold threshold, when the heat pump would
+*           fall back to the electric element. Without a forecast, the whole
+*           night is Cold.
 * - Normal: every other hour.
 *
 * While active, the app overrides any temperature set elsewhere. When the hub
@@ -103,12 +104,13 @@ def mainPage() {
                 paragraph "<span style='color:red'>Boost must end later than it may start. No Boost will run.</span>"
             }
             paragraph "With a forecast, Boost runs in the warmest hours in that range. " +
-                "Without one, it runs for the last hours before hot water is needed, " +
-                "and Cold uses the night hours below."
-            input "coldStart", "enum", title: "Night starts (no forecast)", required: true,
+                "Without one, it runs for the last hours before hot water is needed."
+            input "coldStart", "enum", title: "Night starts", required: true,
                 options: hourOptions(), defaultValue: "22"
-            input "coldEnd", "enum", title: "Night ends (no forecast)", required: true,
-                options: hourOptions(), defaultValue: "8"
+            input "coldEnd", "enum", title: "Night ends", required: true,
+                options: hourOptions(), defaultValue: "7"
+            paragraph "Cold only applies at night: in hours forecast below the cold " +
+                "threshold, or the whole night without a forecast."
         }
 
         section("Force run") {
@@ -481,11 +483,18 @@ List buildPlan(int dayOffset) {
     def boostHours = temps ? pickBoostHours(temps) : fixedBoostHours()
     def threshold = coldThreshold()
     def nightStart = hourSetting("coldStart", 22)
-    def nightEnd = hourSetting("coldEnd", 8)
+    def nightEnd = hourSetting("coldEnd", 7)
 
     return (0..23).collect { h ->
-        def cold = temps ? (temps[h] < threshold) : inHourRange(h, nightStart, nightEnd)
-        def period = cold ? "Cold" : (boostHours.contains(h) ? "Boost" : "Normal")
+        def night = inHourRange(h, nightStart, nightEnd)
+        def tooCold = temps ? temps[h] < threshold : false
+        def period = "Normal"
+        if (night && (tooCold || !temps)) {
+            period = "Cold"
+        } else if (boostHours.contains(h) && !tooCold) {
+            // No Boost in cold hours: the heat pump would lean on the element
+            period = "Boost"
+        }
         [hour: h, period: period, outdoor: temps ? temps[h] : null, source: source]
     }
 }
