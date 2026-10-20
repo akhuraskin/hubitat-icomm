@@ -3,47 +3,47 @@
 *
 * Description:
 * Hubitat app that sets the temperature of an iCOMM heat pump water heater
-* (driver: iCOMMWaterHeater) through the day:
+* (driver: iCOMMWaterHeater) on a fixed daily schedule with three levels:
 *
-*   Cold -> Normal -> Boost -> Normal -> Cold
+*   07:00 Medium (48°C)   14:00 High (52°C)   19:00 Medium (48°C)   22:00 Low (35°C)
 *
-* - Boost:  stores extra heat during the warmest hours of the afternoon, when
-*           the heat pump works best, finishing by the time hot water is
-*           needed in the evening.
-* - Cold:   lowers the temperature at night (22:00-07:00 by default) for
-*           hours forecast below the cold threshold, when the heat pump would
-*           fall back to the electric element. Without a forecast, the whole
-*           night is Cold.
-* - Normal: every other hour.
+* High stores heat in the warmest part of the day, when the heat pump works
+* best. Low keeps the heater idle overnight, when it would work worst. Times,
+* levels and temperatures can be changed.
 *
-* While active, the app overrides any temperature set elsewhere. When the hub
-* is in an Away mode, the heater is put in Vacation mode and restored when you
-* return. A force run raises the temperature to Boost for a set time.
-*
-* The forecast comes from Open-Meteo (https://open-meteo.com), which needs no
-* account, using the hub's location.
+* While active, the app keeps the heater in Heat Pump only mode, so the
+* electric element isn't used, and overrides any temperature set elsewhere.
+* When the hub is in an Away mode, the heater is put in Vacation mode. A force
+* run sets High for a couple of hours.
 *
 * Change Log:
-* [10/19/2026] Initial release
+* [10/20/2026] Initial release
 */
 
 import groovy.transform.Field
 
-@Field static final Map DEFAULTS_C = [boost: 52, normal: 48, cold: 43, threshold: 8]
-@Field static final Map DEFAULTS_F = [boost: 126, normal: 118, cold: 109, threshold: 46]
+@Field static final List LEVELS = ["High", "Medium", "Low"]
+@Field static final String UNUSED = "Unused"
+@Field static final Map DEFAULTS_C = [High: 52, Medium: 48, Low: 35]
+@Field static final Map DEFAULTS_F = [High: 126, Medium: 118, Low: 95]
+@Field static final List DEFAULT_CHANGES = [
+    [hour: 7, level: "Medium"],
+    [hour: 14, level: "High"],
+    [hour: 19, level: "Medium"],
+    [hour: 22, level: "Low"]
+]
+@Field static final Integer MAX_CHANGES = 6
 @Field static final Integer VACATION_DAYS = 100
 @Field static final Long VACATION_RENEW_MS = 99L * 24 * 3600 * 1000
-@Field static final Long FORECAST_MAX_AGE_MS = 12L * 3600 * 1000
 @Field static final Long COMMAND_RETRY_MS = 4L * 60 * 1000
 @Field static final Long RESTORE_TIMEOUT_MS = 60L * 60 * 1000
 @Field static final Integer API_MIN_F = 95
-@Field static final String FORECAST_URI = "https://api.open-meteo.com"
 
 definition(
     name: "iCOMM HPWH Scheduler",
     namespace: "evequefou",
     author: "akhuraskin",
-    description: "Schedules an iCOMM heat pump water heater using the weather forecast",
+    description: "Runs an iCOMM heat pump water heater on a daily schedule with three temperature levels",
     category: "Convenience",
     iconUrl: "",
     iconX2Url: "",
@@ -69,9 +69,6 @@ def mainPage() {
                 } else {
                     input name: "btnForceRun", type: "button", title: "Force run (${fmtHours(forceRunHours())})"
                 }
-                if (forecastEnabled()) {
-                    input name: "btnRefreshForecast", type: "button", title: "Refresh forecast"
-                }
             }
         }
 
@@ -81,40 +78,30 @@ def mainPage() {
 
         def unit = "°${scale()}"
         section("Temperatures") {
-            input "boostTemp", "decimal", title: "Boost (${unit})", required: true,
-                defaultValue: defaultFor("boost"), range: tempRange()
-            input "normalTemp", "decimal", title: "Normal (${unit})", required: true,
-                defaultValue: defaultFor("normal"), range: tempRange()
-            input "coldTemp", "decimal", title: "Cold (${unit})", required: true,
-                defaultValue: defaultFor("cold"), range: tempRange()
-            paragraph "Values above the heater's maximum temperature are capped at the maximum."
+            LEVELS.each { level ->
+                input "temp${level}", "decimal", title: "${level} (${unit})", required: true,
+                    defaultValue: defaultTemp(level), range: tempRange()
+            }
+            paragraph "Values above the heater's maximum temperature are capped at the maximum. " +
+                "The lowest the heater accepts is ${fmtTemp(fromF(API_MIN_F))}."
         }
 
         section("Schedule") {
-            input "useForecast", "bool", title: "Use weather forecast (Open-Meteo)", defaultValue: true
-            input "coldThreshold", "decimal", title: "Cold when the forecast is below (${unit})", required: true,
-                defaultValue: defaultFor("threshold"), range: (scale() == "C" ? "-40..40" : "-40..104")
-            input "boostLength", "enum", title: "Boost length (hours)", required: true,
-                options: (1..8).collect { it.toString() }, defaultValue: "4"
-            input "boostEarliest", "enum", title: "Boost may start from", required: true,
-                options: hourOptions(), defaultValue: "13"
-            input "boostLatest", "enum", title: "Hot water needed by (Boost ends)", required: true,
-                options: hourOptions(), defaultValue: "19"
-            if (boostLatestHour() <= boostEarliestHour()) {
-                paragraph "<span style='color:red'>Boost must end later than it may start. No Boost will run.</span>"
+            paragraph "Each change sets a level from that hour until the next change, every day."
+            (1..MAX_CHANGES).each { i ->
+                def dflt = i <= DEFAULT_CHANGES.size() ? DEFAULT_CHANGES[i - 1] : null
+                input "change${i}Hour", "enum", title: "Change ${i}: time", required: false, width: 6,
+                    options: hourOptions(), defaultValue: dflt ? dflt.hour.toString() : null
+                input "change${i}Level", "enum", title: "Change ${i}: level", required: false, width: 6,
+                    options: LEVELS + [UNUSED], defaultValue: dflt ? dflt.level : UNUSED
             }
-            paragraph "With a forecast, Boost runs in the warmest hours in that range. " +
-                "Without one, it runs for the last hours before hot water is needed."
-            input "coldStart", "enum", title: "Night starts", required: true,
-                options: hourOptions(), defaultValue: "22"
-            input "coldEnd", "enum", title: "Night ends", required: true,
-                options: hourOptions(), defaultValue: "7"
-            paragraph "Cold only applies at night: in hours forecast below the cold " +
-                "threshold, or the whole night without a forecast."
+            if (!scheduleChanges()) {
+                paragraph "<span style='color:red'>No changes set. The heater will stay at Medium.</span>"
+            }
         }
 
         section("Force run") {
-            input "forceRunHours", "decimal", title: "Force run length (hours)", required: true,
+            input "forceRunHours", "decimal", title: "Force run sets High for (hours)", required: true,
                 defaultValue: 2, range: "0.5..12"
         }
 
@@ -122,12 +109,12 @@ def mainPage() {
             input "awayModes", "mode", title: "Hubitat modes that mean Away", multiple: true, required: false,
                 defaultValue: ["Away"]
             paragraph "When Away, the heater is put in Vacation mode for ${VACATION_DAYS} days. " +
-                "It returns to its previous mode when you're back."
+                "When you're back, it returns to Heat Pump only mode and the schedule."
         }
 
         section("Options") {
-            input "heatPumpDuringBoost", "bool", title: "Switch the heater to Heat Pump only during Boost",
-                defaultValue: false
+            input "heatPumpOnly", "bool", title: "Keep the heater in Heat Pump only mode (never use the electric element)",
+                defaultValue: true
             input "debugLogs", "bool", title: "Debug logging", defaultValue: false
             label title: "App name", required: false
         }
@@ -145,9 +132,6 @@ def appButtonHandler(String btn) {
             break
         case "btnCancelForceRun":
             cancelForceRun()
-            break
-        case "btnRefreshForecast":
-            fetchForecast()
             break
     }
 }
@@ -183,17 +167,13 @@ def initialize() {
     if (activeSwitch()) subscribe(activeSwitch(), "switch", "activeSwitchHandler")
     if (forceRunSwitch()) subscribe(forceRunSwitch(), "switch", "forceRunSwitchHandler")
 
-    // Every 5 minutes, on the hour too, so period changes apply on time
+    // Every 5 minutes, including on the hour, so changes apply on time
     schedule("0 0/5 * ? * *", "applySchedule")
-    // Forecast every 3 hours, at a random minute to spread load
-    def minute = 2 + (int) (Math.random() * 50)
-    schedule("0 ${minute} 0/3 ? * *", "fetchForecast")
 
     if (forceRunActive()) {
         runIn(Math.max(1L, (long) ((state.boostUntil - now()) / 1000)), "endForceRun")
     }
 
-    fetchForecast()
     applySchedule()
 }
 
@@ -234,7 +214,7 @@ def setActive(Boolean on) {
         logInfo("Turned on")
         state.deactivating = false
     } else {
-        logInfo("Turned off; setting Normal and stopping")
+        logInfo("Turned off; setting Medium and stopping")
         stopForceRun()
         state.deactivating = true
         state.deactivatingSince = now()
@@ -313,28 +293,25 @@ def applySchedule() {
         handleReturn()
     }
 
-    if (state.restoreMode) {
-        if (mode == "VACATION" && now() - (state.restoreSince ?: now()) < RESTORE_TIMEOUT_MS) {
-            sendMode(state.restoreMode)
-            setStatus("Back from Away: restoring ${modeName(state.restoreMode)} mode")
-            return
-        }
-        if (mode == "VACATION") {
-            log.warn("Heater did not leave Vacation mode after returning from Away")
-        }
-        state.restoreMode = null
-        state.restoreSince = null
-    }
-
     if (mode == "VACATION") {
-        setStatus("Heater is in Vacation mode (set outside this app); waiting")
+        def back = state.restoreMode ?: (heatPumpOnly() ? "HEAT_PUMP" : null)
+        if (back) {
+            sendMode(back)
+            setStatus("Leaving Vacation mode")
+        } else {
+            setStatus("Heater is in Vacation mode (set outside this app); waiting")
+        }
         return
+    }
+    state.restoreMode = null
+
+    if (heatPumpOnly() && mode != null && mode != "HEAT_PUMP") {
+        sendMode("HEAT_PUMP")
     }
 
     def target = currentTarget()
-    applyBoostMode(target.period == "Boost" || target.period == "Force run", mode)
     applySetpoint(target.temp)
-    setStatus("${target.period} ${fmtTemp(target.temp)}" + (target.source ? " (${target.source})" : ""))
+    setStatus("${target.level} ${fmtTemp(target.temp)}")
 }
 
 def handleAway(mode) {
@@ -342,7 +319,6 @@ def handleAway(mode) {
         logInfo("Away: putting heater in Vacation mode")
         state.awayActive = true
         state.restoreMode = null
-        state.restoreSince = null
         if (state.boostUntil != null) {
             logInfo("Force run cancelled: Away")
             stopForceRun()
@@ -356,10 +332,9 @@ def handleAway(mode) {
 
     if (mode != "VACATION") {
         if (!state.weSetVacation) {
-            state.modeBeforeAway = state.modeBeforeBoost ?: mode
+            state.modeBeforeAway = mode
             state.weSetVacation = true
         }
-        state.modeBeforeBoost = null
         sendVacation(false)
     } else if (state.weSetVacation && state.vacationSentAt != null &&
                now() - state.vacationSentAt > VACATION_RENEW_MS) {
@@ -372,16 +347,16 @@ def handleAway(mode) {
 def handleReturn() {
     state.awayActive = false
     if (state.weSetVacation) {
-        state.restoreMode = state.modeBeforeAway ?: "HYBRID"
-        state.restoreSince = now()
-        logInfo("Back from Away: restoring ${modeName(state.restoreMode)} mode")
+        state.restoreMode = heatPumpOnly() ? "HEAT_PUMP" : (state.modeBeforeAway ?: "HYBRID")
+        logInfo("Back from Away: switching heater to ${modeName(state.restoreMode)} mode")
     }
     state.weSetVacation = false
     state.modeBeforeAway = null
     state.vacationSentAt = null
 }
 
-// Undo what the app changed, set Normal once, then stop.
+// Take the heater out of Vacation if the app put it there, set Medium once,
+// then leave the heater alone.
 def runDeactivation() {
     if (!state.deactivating) {
         setStatus("Off")
@@ -394,39 +369,17 @@ def runDeactivation() {
     if (state.restoreMode && mode == "VACATION" &&
         now() - (state.deactivatingSince ?: now()) < RESTORE_TIMEOUT_MS) {
         sendMode(state.restoreMode)
-        setStatus("Turning off: restoring ${modeName(state.restoreMode)} mode")
+        setStatus("Turning off: leaving Vacation mode")
         return
     }
     state.restoreMode = null
-    state.restoreSince = null
-
-    if (state.modeBeforeBoost) {
-        if (mode == "HEAT_PUMP") sendMode(state.modeBeforeBoost)
-        state.modeBeforeBoost = null
-    }
 
     if (mode != "VACATION") {
-        applySetpoint(clampTemp(normalTemp()))
+        applySetpoint(targetTemp("Medium"))
     }
     state.deactivating = false
     state.deactivatingSince = null
     setStatus("Off")
-}
-
-def applyBoostMode(Boolean boosting, mode) {
-    if (boosting && settings.heatPumpDuringBoost) {
-        if (mode && mode != "HEAT_PUMP" && state.modeBeforeBoost == null) {
-            logInfo("Boost: switching heater to Heat Pump only")
-            state.modeBeforeBoost = mode
-            sendMode("HEAT_PUMP")
-        }
-    } else if (state.modeBeforeBoost) {
-        if (mode == "HEAT_PUMP") {
-            logInfo("Boost over: restoring ${modeName(state.modeBeforeBoost)} mode")
-            sendMode(state.modeBeforeBoost)
-        }
-        state.modeBeforeBoost = null
-    }
 }
 
 def applySetpoint(target) {
@@ -466,150 +419,51 @@ def sendVacation(Boolean force) {
 
 Map currentTarget() {
     if (forceRunActive()) {
-        return [period: "Force run", temp: targetTemp("Boost"), source: null]
+        return [level: "Force run", temp: targetTemp("High")]
     }
-    def entry = buildPlan(0)[currentHour()]
-    return [period: entry.period, temp: targetTemp(entry.period), source: entry.source]
+    def level = levelAt(currentHour())
+    return [level: level, temp: targetTemp(level)]
 }
 
 // ---------------------------------------------------------------------------
-// Plan
+// Schedule
 // ---------------------------------------------------------------------------
 
-// One entry per hour of the local day: [hour, period, outdoor, source]
-List buildPlan(int dayOffset) {
-    def temps = forecastForDay(dayOffset)
-    def source = temps ? "forecast" : "fixed times"
-    def boostHours = temps ? pickBoostHours(temps) : fixedBoostHours()
-    def threshold = coldThreshold()
-    def nightStart = hourSetting("coldStart", 22)
-    def nightEnd = hourSetting("coldEnd", 7)
-
-    return (0..23).collect { h ->
-        def night = inHourRange(h, nightStart, nightEnd)
-        def tooCold = temps ? temps[h] < threshold : false
-        def period = "Normal"
-        if (night && (tooCold || !temps)) {
-            period = "Cold"
-        } else if (boostHours.contains(h) && !tooCold) {
-            // No Boost in cold hours: the heat pump would lean on the element
-            period = "Boost"
-        }
-        [hour: h, period: period, outdoor: temps ? temps[h] : null, source: source]
-    }
-}
-
-// Warmest run of boostLength hours between boostEarliest and boostLatest.
-// Ties go to the later start, closer to when hot water is needed.
-List pickBoostHours(List temps) {
-    int earliest = boostEarliestHour()
-    int latest = boostLatestHour()
-    if (latest <= earliest) return []
-    int len = Math.min(boostLengthHours(), latest - earliest)
-
-    Integer best = null
-    def bestSum = null
-    for (int start = earliest; start + len <= latest; start++) {
-        def sum = temps.subList(start, start + len).sum()
-        if (best == null || sum >= bestSum) {
-            best = start
-            bestSum = sum
+// Changes in effect, sorted by hour: [hour, level]
+List scheduleChanges() {
+    def changes = []
+    (1..MAX_CHANGES).each { i ->
+        def dflt = i <= DEFAULT_CHANGES.size() ? DEFAULT_CHANGES[i - 1] : null
+        def hour = settings["change${i}Hour".toString()] ?: dflt?.hour
+        def level = settings["change${i}Level".toString()] ?: (dflt?.level ?: UNUSED)
+        if (hour != null && LEVELS.contains(level)) {
+            changes << [hour: hour.toString() as Integer, level: level, order: i]
         }
     }
-    return (best..<(best + len)).toList()
+    return changes.sort { a, b -> a.hour <=> b.hour ?: a.order <=> b.order }
 }
 
-List fixedBoostHours() {
-    int earliest = boostEarliestHour()
-    int latest = boostLatestHour()
-    if (latest <= earliest) return []
-    int start = Math.max(earliest, latest - boostLengthHours())
-    return (start..<latest).toList()
+// Level at an hour: the last change at or before it, wrapping from the
+// previous day.
+String levelAt(int hour) {
+    def changes = scheduleChanges()
+    if (!changes) return "Medium"
+    def before = changes.findAll { it.hour <= hour }
+    return (before ? before[-1] : changes[-1]).level
 }
 
-Boolean inHourRange(int h, int start, int end) {
-    if (start == end) return false
-    if (start < end) return h >= start && h < end
-    return h >= start || h < end
-}
-
-// ---------------------------------------------------------------------------
-// Forecast
-// ---------------------------------------------------------------------------
-
-def fetchForecast() {
-    if (!forecastEnabled()) return
-    if (location.latitude == null || location.longitude == null) {
-        state.forecastError = "hub location not set"
-        log.warn("Cannot fetch forecast: hub location is not set")
-        return
+// [start, end, level] blocks covering the day
+List daySegments() {
+    def segments = []
+    (0..23).each { h ->
+        def level = levelAt(h)
+        if (segments && segments[-1].level == level) {
+            segments[-1].end = h + 1
+        } else {
+            segments << [start: h, end: h + 1, level: level]
+        }
     }
-    def params = [
-        uri: FORECAST_URI,
-        path: "/v1/forecast",
-        query: [
-            latitude: location.latitude.toString(),
-            longitude: location.longitude.toString(),
-            hourly: "temperature_2m",
-            timeformat: "unixtime",
-            timezone: "UTC",
-            past_days: "1",
-            forecast_days: "3",
-            temperature_unit: (scale() == "F" ? "fahrenheit" : "celsius")
-        ],
-        timeout: 30
-    ]
-    logDebug("Fetching forecast")
-    asynchttpGet("handleForecast", params, [unit: scale()])
-}
-
-def handleForecast(resp, data) {
-    if (resp.hasError()) {
-        forecastFailed(resp.getErrorMessage() ?: "HTTP ${resp.getStatus()}")
-        return
-    }
-    def json
-    try {
-        json = resp.getJson()
-    } catch (e) {
-        forecastFailed("unreadable response")
-        return
-    }
-    def times = json?.hourly?.time
-    def temps = json?.hourly?.temperature_2m
-    if (!(times instanceof List) || !(temps instanceof List) || times.size() != temps.size()) {
-        forecastFailed("unexpected response")
-        return
-    }
-
-    def byHour = [:]
-    times.eachWithIndex { t, i ->
-        if (temps[i] != null) byHour[t.toString()] = temps[i]
-    }
-    state.forecast = byHour
-    state.forecastUnit = data?.unit ?: scale()
-    state.forecastFetchedAt = now()
-    state.forecastError = null
-    logDebug("Forecast updated: ${byHour.size()} hours")
-    applySchedule()
-}
-
-def forecastFailed(String reason) {
-    state.forecastError = reason
-    log.warn("Forecast unavailable (${reason}); using fixed times if no recent forecast")
-}
-
-// 24 hourly temperatures for the local day, or null if the forecast is
-// off, stale or incomplete.
-List forecastForDay(int dayOffset) {
-    if (!forecastEnabled()) return null
-    if (!state.forecast || state.forecastFetchedAt == null) return null
-    if (now() - state.forecastFetchedAt > FORECAST_MAX_AGE_MS) return null
-    if (state.forecastUnit != scale()) return null
-
-    def temps = (0..23).collect { h -> state.forecast[hourEpoch(dayOffset, h).toString()] }
-    if (temps.any { it == null }) return null
-    return temps.collect { it as BigDecimal }
+    return segments
 }
 
 // ---------------------------------------------------------------------------
@@ -632,74 +486,28 @@ String statusHtml() {
 
     if (forceRunActive()) {
         lines << "<b>Force run</b> until ${fmtTime(state.boostUntil)}"
-    }
-
-    if (state.active && !isAway()) {
+    } else if (state.active && !isAway()) {
         lines << "<b>Next change:</b> ${nextChangeText()}"
     }
 
-    lines << "<b>Forecast:</b> ${forecastText()}"
-
-    def plan = buildPlan(0)
-    def planLines = planSegments(plan).collect { seg ->
-        def text = "${hh(seg.start)}–${hh(seg.end)} ${seg.period} ${fmtTemp(targetTemp(seg.period))}"
-        def outside = seg.outdoor.findAll { it != null }
-        if (outside) {
-            def low = fmtTemp(outside.min())
-            def high = fmtTemp(outside.max())
-            text += " <small>(outside ${low == high ? low : low + ' to ' + high})</small>"
-        }
-        text
+    def blocks = daySegments().collect { seg ->
+        "${hh(seg.start)}–${hh(seg.end)} ${seg.level} ${fmtTemp(targetTemp(seg.level))}"
     }
-    lines << "<b>Today (${plan[0].source}):</b><br>" + planLines.join("<br>")
+    lines << "<b>Daily schedule:</b><br>" + blocks.join("<br>")
 
     return lines.join("<br>")
 }
 
-String forecastText() {
-    if (!forecastEnabled()) return "off; using fixed times"
-    def temps = forecastForDay(0)
-    if (!temps) {
-        def reason = state.forecastError ?: "not loaded yet"
-        return "unavailable (${reason}); using fixed times"
-    }
-    def high = temps.max()
-    def highHour = temps.indexOf(high)
-    return "Open-Meteo, updated ${fmtTime(state.forecastFetchedAt)}; " +
-        "high ${fmtTemp(high)} at ${hh(highHour)}, low ${fmtTemp(temps.min())}"
-}
-
 String nextChangeText() {
-    if (forceRunActive()) return "force run ends at ${fmtTime(state.boostUntil)}"
-
-    def today = buildPlan(0)
     int h = currentHour()
-    def current = today[h].period
-    for (int i = h + 1; i < 24; i++) {
-        if (today[i].period != current) {
-            return "${hh(i)} ${today[i].period} ${fmtTemp(targetTemp(today[i].period))}"
+    def current = levelAt(h)
+    for (int i = 1; i < 24; i++) {
+        def level = levelAt((h + i) % 24)
+        if (level != current) {
+            return "${hh(h + i)} ${level} ${fmtTemp(targetTemp(level))}"
         }
     }
-    def tomorrow = buildPlan(1)
-    for (int i = 0; i < 24; i++) {
-        if (tomorrow[i].period != current) {
-            return "tomorrow ${hh(i)} ${tomorrow[i].period} ${fmtTemp(targetTemp(tomorrow[i].period))}"
-        }
-    }
-    return "none in the next day"
-}
-
-List planSegments(List plan) {
-    def segments = []
-    plan.each { e ->
-        if (segments && segments[-1].period == e.period) {
-            segments[-1].end = e.hour + 1
-            segments[-1].outdoor << e.outdoor
-        } else {
-            segments << [start: e.hour, end: e.hour + 1, period: e.period, outdoor: [e.outdoor]]
-        }
-    }
-    return segments
+    return "none (same level all day)"
 }
 
 // ---------------------------------------------------------------------------
@@ -746,25 +554,17 @@ def switchOff(dev) {
 
 String scale() { location.temperatureScale ?: "F" }
 
-def defaultFor(String key) { (scale() == "C" ? DEFAULTS_C : DEFAULTS_F)[key] }
+def defaultTemp(String level) { (scale() == "C" ? DEFAULTS_C : DEFAULTS_F)[level] }
 
 String tempRange() { scale() == "C" ? "35..70" : "95..158" }
 
-def settingTemp(String name, String key) {
-    def v = settings[name]
-    return (v != null ? v : defaultFor(key)) as BigDecimal
+def levelTemp(String level) {
+    def v = settings["temp${level}".toString()]
+    return (v != null ? v : defaultTemp(level)) as BigDecimal
 }
 
-def boostTemp() { settingTemp("boostTemp", "boost") }
-def normalTemp() { settingTemp("normalTemp", "normal") }
-def coldTemp() { settingTemp("coldTemp", "cold") }
-def coldThreshold() { settingTemp("coldThreshold", "threshold") }
-
-def targetTemp(String period) {
-    def t = normalTemp()
-    if (period == "Boost" || period == "Force run") t = boostTemp()
-    if (period == "Cold") t = coldTemp()
-    return clampTemp(t)
+def targetTemp(String level) {
+    return clampTemp(levelTemp(level == "Force run" ? "High" : level))
 }
 
 // Keep within what the heater accepts, on a value it can store exactly
@@ -776,21 +576,12 @@ def clampTemp(t) {
     return fromF(toF(t))
 }
 
-int hourSetting(String name, int dflt) {
-    def v = settings[name]
-    return v != null ? (v.toString() as Integer) : dflt
-}
-
-int boostEarliestHour() { hourSetting("boostEarliest", 13) }
-int boostLatestHour() { hourSetting("boostLatest", 19) }
-int boostLengthHours() { hourSetting("boostLength", 4) }
-
 def forceRunHours() {
     def v = settings.forceRunHours
     return (v != null ? v : 2) as BigDecimal
 }
 
-Boolean forecastEnabled() { settings.useForecast != false }
+Boolean heatPumpOnly() { settings.heatPumpOnly != false }
 
 Boolean isAway() {
     def modes = settings.awayModes
@@ -813,19 +604,6 @@ int currentHour() {
     def cal = Calendar.getInstance(tz())
     cal.setTimeInMillis(now())
     return cal.get(Calendar.HOUR_OF_DAY)
-}
-
-// Epoch seconds for the start of an hour of a local day
-long hourEpoch(int dayOffset, int hour) {
-    def cal = Calendar.getInstance(tz())
-    cal.setTimeInMillis(now())
-    cal.set(Calendar.HOUR_OF_DAY, 0)
-    cal.set(Calendar.MINUTE, 0)
-    cal.set(Calendar.SECOND, 0)
-    cal.set(Calendar.MILLISECOND, 0)
-    cal.add(Calendar.DAY_OF_MONTH, dayOffset)
-    cal.set(Calendar.HOUR_OF_DAY, hour)
-    return (long) (cal.getTimeInMillis() / 1000)
 }
 
 String hh(int h) { String.format("%02d:00", h % 24) }

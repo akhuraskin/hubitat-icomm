@@ -15,30 +15,31 @@ Based on:
 
 # Heat Pump Water Heater Scheduler (app)
 
-`icomm-hpwh-scheduler.groovy` is a Hubitat app that sets the temperature of an
-iCOMM heat pump water heater through the day:
+`icomm-hpwh-scheduler.groovy` is a Hubitat app that runs an iCOMM heat pump
+water heater on a fixed daily schedule with three temperature levels:
 
-Cold → Normal → Boost → Normal → Cold
-
-| Period | Default | When |
+| Time | Level | Default |
 | --- | --- | --- |
-| Boost | 52°C / 126°F | The warmest hours between 13:00 and 19:00 (4 hours), so extra heat is stored while the heat pump works best and is ready by evening. Skipped in hours below 8°C / 46°F. Without a forecast: 15:00–19:00. |
-| Cold | 43°C / 109°F | Night hours (22:00–07:00) forecast below 8°C / 46°F, when the heat pump would fall back to the electric element. Without a forecast: the whole night. |
-| Normal | 48°C / 118°F | Every other hour. |
+| 07:00–14:00 | Medium | 48°C / 118°F |
+| 14:00–19:00 | High | 52°C / 126°F |
+| 19:00–22:00 | Medium | 48°C / 118°F |
+| 22:00–07:00 | Low | 35°C / 95°F (the heater's minimum, so it stays idle) |
 
-- **Forecast**: [Open-Meteo](https://open-meteo.com), no account needed. Uses
-  the hub's location, refreshes every 3 hours, and falls back to the fixed
-  times if it can't be fetched.
+High stores heat in the warmest part of the day, when the heat pump works
+best. Low keeps the heater idle overnight, when it would work worst. Up to six
+changes can be set, each with a time and a level.
+
+- **Heat Pump only**: while active, the app keeps the heater in Heat Pump
+  only mode so the electric element isn't used. Can be turned off.
 - **Active**: while on, the app puts its temperature back if it's changed
-  anywhere else. Turning it off sets Normal once and stops.
-- **Force run**: Boost for 2 hours, then back to the schedule.
+  anywhere else. Turning it off sets Medium once and stops.
+- **Force run**: High for 2 hours, then back to the schedule.
 - **Away**: when the hub's mode is Away, the heater goes into Vacation mode
-  for 100 days (renewed if needed). When you're back it returns to its
-  previous mode and the schedule resumes.
-- **Optional**: switch the heater to Heat Pump only during Boost.
+  for 100 days (renewed if needed). When you're back it returns to Heat Pump
+  only mode and the schedule.
 
 The app creates two switches, *Active* and *Force Run*, for dashboards, voice
-assistants and rules. All times and temperatures can be changed in the app.
+assistants and rules.
 
 ## Install
 
@@ -46,12 +47,10 @@ assistants and rules. All times and temperatures can be changed in the app.
    `icomm-water-heater.groovy`) and make sure the water heater device works.
 2. *Apps Code → New App*, paste `icomm-hpwh-scheduler.groovy`, *Save*.
 3. *Apps → Add User App → iCOMM HPWH Scheduler*, pick the water heater, *Done*.
-4. Check that *Settings → Location* has the hub's latitude and longitude, or
-   the app will use the fixed times.
 
 # Change Log
 
-* [10/19/2026] Add Heat Pump Water Heater Scheduler app
+* [10/20/2026] Add Heat Pump Water Heater Scheduler app
 * [10/18/2026] Hide controls the water heater doesn't support (cooling, fan,
   thermostat mode, schedule, set level). Only Set Heating Setpoint, Set Mode
   and Refresh remain
