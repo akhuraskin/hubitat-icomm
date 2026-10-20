@@ -27,11 +27,13 @@ import groovy.transform.Field
 @Field static final Map DEFAULTS_C = [High: 52, Medium: 48, Low: 35]
 @Field static final Map DEFAULTS_F = [High: 126, Medium: 118, Low: 95]
 @Field static final List DEFAULT_CHANGES = [
-    [hour: 7, level: "Medium"],
-    [hour: 14, level: "High"],
-    [hour: 19, level: "Medium"],
-    [hour: 22, level: "Low"]
+    [minute: 7 * 60, level: "Medium"],
+    [minute: 14 * 60, level: "High"],
+    [minute: 19 * 60, level: "Medium"],
+    [minute: 22 * 60, level: "Low"]
 ]
+@Field static final Integer STEP_MINUTES = 30
+@Field static final Integer DAY_MINUTES = 24 * 60
 @Field static final Integer MAX_CHANGES = 6
 @Field static final Integer VACATION_DAYS = 100
 @Field static final Long VACATION_RENEW_MS = 99L * 24 * 3600 * 1000
@@ -87,11 +89,11 @@ def mainPage() {
         }
 
         section("Schedule") {
-            paragraph "Each change sets a level from that hour until the next change, every day."
+            paragraph "Each change sets a level from that time until the next change, every day."
             (1..MAX_CHANGES).each { i ->
                 def dflt = i <= DEFAULT_CHANGES.size() ? DEFAULT_CHANGES[i - 1] : null
-                input "change${i}Hour", "enum", title: "Change ${i}: time", required: false, width: 6,
-                    options: hourOptions(), defaultValue: dflt ? dflt.hour.toString() : null
+                input "change${i}Time", "enum", title: "Change ${i}: time", required: false, width: 6,
+                    options: timeOptions(), defaultValue: dflt ? dflt.minute.toString() : null
                 input "change${i}Level", "enum", title: "Change ${i}: level", required: false, width: 6,
                     options: LEVELS + [UNUSED], defaultValue: dflt ? dflt.level : UNUSED
             }
@@ -165,7 +167,7 @@ def initialize() {
     if (activeSwitch()) subscribe(activeSwitch(), "switch", "activeSwitchHandler")
     if (forceRunSwitch()) subscribe(forceRunSwitch(), "switch", "forceRunSwitchHandler")
 
-    // Every 5 minutes, including on the hour, so changes apply on time
+    // Every 5 minutes, including :00 and :30, so changes apply on time
     schedule("0 0/5 * ? * *", "applySchedule")
 
     if (forceRunActive()) {
@@ -410,7 +412,7 @@ Map currentTarget() {
     if (forceRunActive()) {
         return [level: "Force run", temp: targetTemp("High")]
     }
-    def level = levelAt(currentHour())
+    def level = levelAt(currentMinute())
     return [level: level, temp: targetTemp(level)]
 }
 
@@ -418,38 +420,38 @@ Map currentTarget() {
 // Schedule
 // ---------------------------------------------------------------------------
 
-// Changes in effect, sorted by hour: [hour, level]
+// Changes in effect, sorted by time: [minute (of the day), level]
 List scheduleChanges() {
     def changes = []
     (1..MAX_CHANGES).each { i ->
         def dflt = i <= DEFAULT_CHANGES.size() ? DEFAULT_CHANGES[i - 1] : null
-        def hour = settings["change${i}Hour".toString()] ?: dflt?.hour
+        def minute = settings["change${i}Time".toString()] ?: dflt?.minute
         def level = settings["change${i}Level".toString()] ?: (dflt?.level ?: UNUSED)
-        if (hour != null && LEVELS.contains(level)) {
-            changes << [hour: hour.toString() as Integer, level: level, order: i]
+        if (minute != null && LEVELS.contains(level)) {
+            changes << [minute: minute.toString() as Integer, level: level, order: i]
         }
     }
-    return changes.sort { a, b -> a.hour <=> b.hour ?: a.order <=> b.order }
+    return changes.sort { a, b -> a.minute <=> b.minute ?: a.order <=> b.order }
 }
 
-// Level at an hour: the last change at or before it, wrapping from the
-// previous day.
-String levelAt(int hour) {
+// Level at a time of day (minutes): the last change at or before it,
+// wrapping from the previous day.
+String levelAt(int minute) {
     def changes = scheduleChanges()
     if (!changes) return "Medium"
-    def before = changes.findAll { it.hour <= hour }
+    def before = changes.findAll { it.minute <= minute }
     return (before ? before[-1] : changes[-1]).level
 }
 
-// [start, end, level] blocks covering the day
+// [start, end, level] blocks covering the day, in minutes
 List daySegments() {
     def segments = []
-    (0..23).each { h ->
-        def level = levelAt(h)
+    for (int m = 0; m < DAY_MINUTES; m += STEP_MINUTES) {
+        def level = levelAt(m)
         if (segments && segments[-1].level == level) {
-            segments[-1].end = h + 1
+            segments[-1].end = m + STEP_MINUTES
         } else {
-            segments << [start: h, end: h + 1, level: level]
+            segments << [start: m, end: m + STEP_MINUTES, level: level]
         }
     }
     return segments
@@ -480,7 +482,7 @@ String statusHtml() {
     }
 
     def blocks = daySegments().collect { seg ->
-        "${hh(seg.start)}–${hh(seg.end)} ${seg.level} ${fmtTemp(targetTemp(seg.level))}"
+        "${hm(seg.start)}–${hm(seg.end)} ${seg.level} ${fmtTemp(targetTemp(seg.level))}"
     }
     lines << "<b>Daily schedule:</b><br>" + blocks.join("<br>")
 
@@ -488,12 +490,13 @@ String statusHtml() {
 }
 
 String nextChangeText() {
-    int h = currentHour()
-    def current = levelAt(h)
-    for (int i = 1; i < 24; i++) {
-        def level = levelAt((h + i) % 24)
+    int nowMin = currentMinute()
+    def current = levelAt(nowMin)
+    int slot = nowMin - nowMin % STEP_MINUTES
+    for (int m = slot + STEP_MINUTES; m < slot + DAY_MINUTES; m += STEP_MINUTES) {
+        def level = levelAt(m % DAY_MINUTES)
         if (level != current) {
-            return "${hh(h + i)} ${level} ${fmtTemp(targetTemp(level))}"
+            return "${hm(m)} ${level} ${fmtTemp(targetTemp(level))}"
         }
     }
     return "none (same level all day)"
@@ -577,8 +580,12 @@ Boolean isAway() {
     return modes.contains(location.mode)
 }
 
-List hourOptions() {
-    (0..23).collect { [(it.toString()): hh(it)] }
+// Values are minutes since midnight
+List timeOptions() {
+    (0..<(DAY_MINUTES / STEP_MINUTES)).collect { i ->
+        def m = i * STEP_MINUTES
+        [(m.toString()): hm(m)]
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -587,13 +594,17 @@ List hourOptions() {
 
 TimeZone tz() { location.timeZone ?: TimeZone.getDefault() }
 
-int currentHour() {
+// Minutes since local midnight
+int currentMinute() {
     def cal = Calendar.getInstance(tz())
     cal.setTimeInMillis(now())
-    return cal.get(Calendar.HOUR_OF_DAY)
+    return cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
 }
 
-String hh(int h) { String.format("%02d:00", h % 24) }
+String hm(int minutes) {
+    int m = minutes % DAY_MINUTES
+    return String.format("%02d:%02d", m.intdiv(60), m % 60)
+}
 
 String fmtTime(ms) { new Date((long) ms).format("HH:mm", tz()) }
 
