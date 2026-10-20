@@ -26,8 +26,9 @@ water heater on a fixed daily schedule with three temperature levels:
 | 22:00–07:00 | Low | 35°C / 95°F (the heater's minimum, so it stays idle) |
 
 High stores heat in the warmest part of the day, when the heat pump works
-best. Low keeps the heater idle overnight, when it would work worst. Up to six
-changes can be set, each with a time (in half-hour steps) and a level.
+best. Low keeps the heater idle overnight, when it would work worst. Each
+change has a time (in half-hour steps) and a level; use *Add time* and
+*Remove* to edit the schedule (up to 12 changes).
 
 - **Heat Pump only**: while active, the app keeps the heater in Heat Pump
   only mode so the electric element isn't used.

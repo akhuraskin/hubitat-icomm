@@ -23,7 +23,6 @@
 import groovy.transform.Field
 
 @Field static final List LEVELS = ["High", "Medium", "Low"]
-@Field static final String UNUSED = "Unused"
 @Field static final Map DEFAULTS_C = [High: 52, Medium: 48, Low: 35]
 @Field static final Map DEFAULTS_F = [High: 126, Medium: 118, Low: 95]
 @Field static final List DEFAULT_CHANGES = [
@@ -34,7 +33,7 @@ import groovy.transform.Field
 ]
 @Field static final Integer STEP_MINUTES = 30
 @Field static final Integer DAY_MINUTES = 24 * 60
-@Field static final Integer MAX_CHANGES = 6
+@Field static final Integer MAX_CHANGES = 12
 @Field static final Integer VACATION_DAYS = 100
 @Field static final Long VACATION_RENEW_MS = 99L * 24 * 3600 * 1000
 @Field static final Long COMMAND_RETRY_MS = 4L * 60 * 1000
@@ -90,12 +89,17 @@ def mainPage() {
 
         section("Schedule") {
             paragraph "Each change sets a level from that time until the next change, every day."
-            (1..MAX_CHANGES).each { i ->
-                def dflt = i <= DEFAULT_CHANGES.size() ? DEFAULT_CHANGES[i - 1] : null
-                input "change${i}Time", "enum", title: "Change ${i}: time", required: false, width: 6,
-                    options: timeOptions(), defaultValue: dflt ? dflt.minute.toString() : null
-                input "change${i}Level", "enum", title: "Change ${i}: level", required: false, width: 6,
-                    options: LEVELS + [UNUSED], defaultValue: dflt ? dflt.level : UNUSED
+            sortedChangeIds().each { id ->
+                def dflt = defaultChange(id)
+                input "change${id}Time", "enum", title: "Time", required: false, width: 4,
+                    options: timeOptions(), defaultValue: dflt ? dflt.minute.toString() : null,
+                    submitOnChange: true
+                input "change${id}Level", "enum", title: "Level", required: false, width: 4,
+                    options: LEVELS, defaultValue: dflt?.level, submitOnChange: true
+                input name: "btnRemoveChange_${id}", type: "button", title: "Remove", width: 4
+            }
+            if (changeIds().size() < MAX_CHANGES) {
+                input name: "btnAddChange", type: "button", title: "Add time"
             }
             if (!scheduleChanges()) {
                 paragraph "<span style='color:red'>No changes set. The heater will stay at Medium.</span>"
@@ -122,6 +126,14 @@ def mainPage() {
 }
 
 def appButtonHandler(String btn) {
+    if (btn == "btnAddChange") {
+        addChange()
+        return
+    }
+    if (btn.startsWith("btnRemoveChange_")) {
+        removeChange(btn.substring("btnRemoveChange_".length()) as Integer)
+        return
+    }
     if (!heater) return
     switch (btn) {
         case "btnActive":
@@ -421,17 +433,60 @@ Map currentTarget() {
 // ---------------------------------------------------------------------------
 
 // Changes in effect, sorted by time: [minute (of the day), level]
+// Rows with no time or level yet are skipped.
 List scheduleChanges() {
     def changes = []
-    (1..MAX_CHANGES).each { i ->
-        def dflt = i <= DEFAULT_CHANGES.size() ? DEFAULT_CHANGES[i - 1] : null
-        def minute = settings["change${i}Time".toString()] ?: dflt?.minute
-        def level = settings["change${i}Level".toString()] ?: (dflt?.level ?: UNUSED)
-        if (minute != null && LEVELS.contains(level)) {
-            changes << [minute: minute.toString() as Integer, level: level, order: i]
-        }
+    changeIds().each { id ->
+        def c = changeAt(id)
+        if (c.minute != null && LEVELS.contains(c.level)) changes << c
     }
-    return changes.sort { a, b -> a.minute <=> b.minute ?: a.order <=> b.order }
+    return changes.sort { a, b -> a.minute <=> b.minute ?: a.id <=> b.id }
+}
+
+// The schedule rows are kept as a list of ids in state; each id has its own
+// change<id>Time and change<id>Level settings. Ids 1-4 start with the
+// default schedule. Removed ids are never reused, so a new row starts empty.
+List changeIds() {
+    if (state.changeIds == null) {
+        state.changeIds = (1..DEFAULT_CHANGES.size()).toList()
+        state.nextChangeId = DEFAULT_CHANGES.size() + 1
+    }
+    return state.changeIds
+}
+
+Map defaultChange(id) {
+    return id <= DEFAULT_CHANGES.size() ? DEFAULT_CHANGES[id - 1] : null
+}
+
+Map changeAt(id) {
+    def dflt = defaultChange(id)
+    def minute = settings["change${id}Time".toString()] ?: dflt?.minute
+    def level = settings["change${id}Level".toString()] ?: dflt?.level
+    return [id: id, minute: minute != null ? (minute.toString() as Integer) : null, level: level]
+}
+
+// Rows in time order, new (empty) rows last
+List sortedChangeIds() {
+    def key = { id ->
+        def m = changeAt(id).minute
+        return m == null ? DAY_MINUTES : m
+    }
+    return changeIds().sort(false) { a, b -> key(a) <=> key(b) ?: a <=> b }
+}
+
+def addChange() {
+    def ids = changeIds()
+    if (ids.size() >= MAX_CHANGES) return
+    int id = state.nextChangeId ?: ((ids ? ids.max() : 0) + 1)
+    state.changeIds = ids + [id]
+    state.nextChangeId = id + 1
+}
+
+def removeChange(Integer id) {
+    state.changeIds = changeIds() - [id]
+    app.removeSetting("change${id}Time")
+    app.removeSetting("change${id}Level")
+    if (heater && app.getInstallationState() == "COMPLETE") applySchedule()
 }
 
 // Level at a time of day (minutes): the last change at or before it,
