@@ -30,7 +30,7 @@ best. Low keeps the heater idle overnight, when it would work worst. Up to six
 changes can be set, each with a time and a level.
 
 - **Heat Pump only**: while active, the app keeps the heater in Heat Pump
-  only mode so the electric element isn't used. Can be turned off.
+  only mode so the electric element isn't used.
 - **Active**: while on, the app puts its temperature back if it's changed
   anywhere else. Turning it off sets Medium once and stops.
 - **Force run**: High for 2 hours, then back to the schedule.

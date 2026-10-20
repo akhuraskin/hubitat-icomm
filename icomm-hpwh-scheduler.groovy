@@ -113,8 +113,6 @@ def mainPage() {
         }
 
         section("Options") {
-            input "heatPumpOnly", "bool", title: "Keep the heater in Heat Pump only mode (never use the electric element)",
-                defaultValue: true
             input "debugLogs", "bool", title: "Debug logging", defaultValue: false
             label title: "App name", required: false
         }
@@ -294,18 +292,13 @@ def applySchedule() {
     }
 
     if (mode == "VACATION") {
-        def back = state.restoreMode ?: (heatPumpOnly() ? "HEAT_PUMP" : null)
-        if (back) {
-            sendMode(back)
-            setStatus("Leaving Vacation mode")
-        } else {
-            setStatus("Heater is in Vacation mode (set outside this app); waiting")
-        }
+        sendMode("HEAT_PUMP")
+        setStatus("Leaving Vacation mode")
         return
     }
     state.restoreMode = null
 
-    if (heatPumpOnly() && mode != null && mode != "HEAT_PUMP") {
+    if (mode != null && mode != "HEAT_PUMP") {
         sendMode("HEAT_PUMP")
     }
 
@@ -331,10 +324,7 @@ def handleAway(mode) {
     }
 
     if (mode != "VACATION") {
-        if (!state.weSetVacation) {
-            state.modeBeforeAway = mode
-            state.weSetVacation = true
-        }
+        state.weSetVacation = true
         sendVacation(false)
     } else if (state.weSetVacation && state.vacationSentAt != null &&
                now() - state.vacationSentAt > VACATION_RENEW_MS) {
@@ -347,11 +337,10 @@ def handleAway(mode) {
 def handleReturn() {
     state.awayActive = false
     if (state.weSetVacation) {
-        state.restoreMode = heatPumpOnly() ? "HEAT_PUMP" : (state.modeBeforeAway ?: "HYBRID")
-        logInfo("Back from Away: switching heater to ${modeName(state.restoreMode)} mode")
+        state.restoreMode = "HEAT_PUMP"
+        logInfo("Back from Away: switching heater to Heat Pump mode")
     }
     state.weSetVacation = false
-    state.modeBeforeAway = null
     state.vacationSentAt = null
 }
 
@@ -580,8 +569,6 @@ def forceRunHours() {
     def v = settings.forceRunHours
     return (v != null ? v : 2) as BigDecimal
 }
-
-Boolean heatPumpOnly() { settings.heatPumpOnly != false }
 
 Boolean isAway() {
     def modes = settings.awayModes
